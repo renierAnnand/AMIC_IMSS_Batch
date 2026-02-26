@@ -39,6 +39,54 @@ def load_brigades() -> list:
 
 BRIGADES = load_brigades()
 
+
+# ─────────────────────────────────────────────────────────────
+# LOAD PARTS CATALOGUE FROM CSV
+# ─────────────────────────────────────────────────────────────
+@st.cache_data(show_spinner="Loading parts catalogue…")
+def load_parts() -> pd.DataFrame:
+    """
+    Load and clean the IMSS materials/spare parts catalogue.
+    Returns a DataFrame with columns: MNGPartNumber, DescriptionEn, DescriptionAr,
+    UnitOfMeasure, Criticality, PlatformVehicleType, Supplier, UnitPrice.
+    TO REPLACE WITH DB: SELECT * FROM materials WHERE IsActive = true
+    """
+    csv_path = os.path.join(os.path.dirname(__file__), "materials_export_2026-02-26.csv")
+    if not os.path.exists(csv_path):
+        return pd.DataFrame(columns=["MNGPartNumber", "DescriptionEn", "DescriptionAr",
+                                     "UnitOfMeasure", "Criticality", "PlatformVehicleType",
+                                     "Supplier", "UnitPrice"])
+
+    df = pd.read_csv(csv_path, comment="#", encoding="utf-8-sig", low_memory=False)
+    df.columns = [c.strip() for c in df.columns]
+
+    keep_cols = ["MNGPartNumber", "DescriptionEn", "DescriptionAr",
+                 "UnitOfMeasure", "Criticality", "PlatformVehicleType",
+                 "Supplier", "UnitPrice", "NSN", "OEMPartNumber",
+                 "WarehouseCategory", "Repairability", "LeadTimeDays",
+                 "MinStockLevel", "MaxStockLevel"]
+    df = df[[c for c in keep_cols if c in df.columns]].copy()
+
+    # Clean
+    df["MNGPartNumber"] = df["MNGPartNumber"].astype(str).str.strip()
+    df["DescriptionEn"] = df["DescriptionEn"].astype(str).str.strip()
+
+    # Filter active & valid
+    active_mask = df.get("IsActive", pd.Series(["true"] * len(df))).astype(str).str.strip().str.lower() != "false"
+    valid_mask = (
+        (df["DescriptionEn"].str.len() > 3) &
+        (~df["DescriptionEn"].isin(["0", "N/A", "NA", "nan"])) &
+        (df["MNGPartNumber"].str.len() > 3)
+    )
+    df = df[valid_mask].drop_duplicates(subset="MNGPartNumber").reset_index(drop=True)
+
+    # Searchable label for selectboxes
+    df["label"] = df["MNGPartNumber"] + " — " + df["DescriptionEn"]
+    return df
+
+
+PARTS_DF = load_parts()
+
 # ─────────────────────────────────────────────────────────────
 # PAGE CONFIG
 # ─────────────────────────────────────────────────────────────
@@ -266,57 +314,62 @@ def init_data():
          "status": "Closed"},
     ])
 
-    # ── WO Part Lines (same part_no across multiple WOs to demo batch aggregation) ──
-    # PART-001 (engine filter) needed by WO-0001,0002,0003,0005,0007,0009 — total ~100 units
-    # PART-002 (brake pad) across several WOs
-    # PART-003 (hydraulic hose) unique to a few
+    # ── WO Part Lines — using real MNGPartNumbers from the IMSS catalogue ──
+    # PART 1457429180  = OIL FILTER               (appears in WO-0001,0002,0003,0005,0007,0009 — total ~100 units)
+    # PART 7161360160  = BRAKE PAD                (multiple WOs)
+    # PART 000000029761 = PUMP,FUEL,ELECTRICAL     (several WOs)
+    # PART 000000016958 = BELT,V                  (a few WOs)
+    # PART 000000051836 = Coolant Hose HVAC        (WO-0005,0009)
+    # PART 424316-0290  = BRAKE DISC              (WO-0003,0008)
+    # PART WP9757-03    = PUMP,WATER              (WO-0006)
+    # PART 000000014242 = FILTER ELEMENT,FLUID    (WO-0002,0004)
     wo_part_lines = pd.DataFrame([
         # WO-0001 (Critical)
-        {"line_id": "LN-0001", "wo_id": "WO-0001", "part_no": "PART-001",
-         "part_desc": "Engine Oil Filter", "required_qty": 20, "allocated_qty": 0, "received_qty": 0},
-        {"line_id": "LN-0002", "wo_id": "WO-0001", "part_no": "PART-002",
-         "part_desc": "Brake Pad Set", "required_qty": 8, "allocated_qty": 0, "received_qty": 0},
+        {"line_id": "LN-0001", "wo_id": "WO-0001", "part_no": "1457429180",
+         "part_desc": "OIL FILTER", "required_qty": 20, "allocated_qty": 0, "received_qty": 0},
+        {"line_id": "LN-0002", "wo_id": "WO-0001", "part_no": "7161360160",
+         "part_desc": "BRAKE PAD", "required_qty": 8, "allocated_qty": 0, "received_qty": 0},
         # WO-0002 (High)
-        {"line_id": "LN-0003", "wo_id": "WO-0002", "part_no": "PART-001",
-         "part_desc": "Engine Oil Filter", "required_qty": 15, "allocated_qty": 0, "received_qty": 0},
-        {"line_id": "LN-0004", "wo_id": "WO-0002", "part_no": "PART-003",
-         "part_desc": "Hydraulic Hose 1/2\"", "required_qty": 5, "allocated_qty": 0, "received_qty": 0},
+        {"line_id": "LN-0003", "wo_id": "WO-0002", "part_no": "1457429180",
+         "part_desc": "OIL FILTER", "required_qty": 15, "allocated_qty": 0, "received_qty": 0},
+        {"line_id": "LN-0004", "wo_id": "WO-0002", "part_no": "000000014242",
+         "part_desc": "FILTER ELEMENT,FLUID", "required_qty": 5, "allocated_qty": 0, "received_qty": 0},
         # WO-0003 (Normal)
-        {"line_id": "LN-0005", "wo_id": "WO-0003", "part_no": "PART-001",
-         "part_desc": "Engine Oil Filter", "required_qty": 12, "allocated_qty": 0, "received_qty": 0},
-        {"line_id": "LN-0006", "wo_id": "WO-0003", "part_no": "PART-004",
-         "part_desc": "Air Filter Element", "required_qty": 10, "allocated_qty": 0, "received_qty": 0},
-        # WO-0004 (High - Under Maintenance, existing batch)
-        {"line_id": "LN-0007", "wo_id": "WO-0004", "part_no": "PART-002",
-         "part_desc": "Brake Pad Set", "required_qty": 4, "allocated_qty": 0, "received_qty": 0},
+        {"line_id": "LN-0005", "wo_id": "WO-0003", "part_no": "1457429180",
+         "part_desc": "OIL FILTER", "required_qty": 12, "allocated_qty": 0, "received_qty": 0},
+        {"line_id": "LN-0006", "wo_id": "WO-0003", "part_no": "424316-0290",
+         "part_desc": "BRAKE DISC", "required_qty": 10, "allocated_qty": 0, "received_qty": 0},
+        # WO-0004 (High - Under Maintenance)
+        {"line_id": "LN-0007", "wo_id": "WO-0004", "part_no": "000000014242",
+         "part_desc": "FILTER ELEMENT,FLUID", "required_qty": 4, "allocated_qty": 0, "received_qty": 0},
         # WO-0005 (Critical)
-        {"line_id": "LN-0008", "wo_id": "WO-0005", "part_no": "PART-001",
-         "part_desc": "Engine Oil Filter", "required_qty": 18, "allocated_qty": 0, "received_qty": 0},
-        {"line_id": "LN-0009", "wo_id": "WO-0005", "part_no": "PART-005",
-         "part_desc": "Coolant Tank Cap", "required_qty": 3, "allocated_qty": 0, "received_qty": 0},
+        {"line_id": "LN-0008", "wo_id": "WO-0005", "part_no": "1457429180",
+         "part_desc": "OIL FILTER", "required_qty": 18, "allocated_qty": 0, "received_qty": 0},
+        {"line_id": "LN-0009", "wo_id": "WO-0005", "part_no": "000000051836",
+         "part_desc": "Coolant Hose HVAC", "required_qty": 3, "allocated_qty": 0, "received_qty": 0},
         # WO-0006 (Normal)
-        {"line_id": "LN-0010", "wo_id": "WO-0006", "part_no": "PART-003",
-         "part_desc": "Hydraulic Hose 1/2\"", "required_qty": 8, "allocated_qty": 0, "received_qty": 0},
-        {"line_id": "LN-0011", "wo_id": "WO-0006", "part_no": "PART-004",
-         "part_desc": "Air Filter Element", "required_qty": 6, "allocated_qty": 0, "received_qty": 0},
-        # WO-0007 (Critical, 2nd Brigade)
-        {"line_id": "LN-0012", "wo_id": "WO-0007", "part_no": "PART-001",
-         "part_desc": "Engine Oil Filter", "required_qty": 20, "allocated_qty": 0, "received_qty": 0},
-        {"line_id": "LN-0013", "wo_id": "WO-0007", "part_no": "PART-006",
-         "part_desc": "Drive Belt", "required_qty": 4, "allocated_qty": 0, "received_qty": 0},
-        # WO-0008 (High, 2nd Brigade)
-        {"line_id": "LN-0014", "wo_id": "WO-0008", "part_no": "PART-002",
-         "part_desc": "Brake Pad Set", "required_qty": 8, "allocated_qty": 0, "received_qty": 0},
-        {"line_id": "LN-0015", "wo_id": "WO-0008", "part_no": "PART-006",
-         "part_desc": "Drive Belt", "required_qty": 2, "allocated_qty": 0, "received_qty": 0},
-        # WO-0009 (Normal, 2nd Brigade)
-        {"line_id": "LN-0016", "wo_id": "WO-0009", "part_no": "PART-001",
-         "part_desc": "Engine Oil Filter", "required_qty": 15, "allocated_qty": 0, "received_qty": 0},
-        {"line_id": "LN-0017", "wo_id": "WO-0009", "part_no": "PART-005",
-         "part_desc": "Coolant Tank Cap", "required_qty": 5, "allocated_qty": 0, "received_qty": 0},
-        # WO-0010 (Closed, no procurement needed but kept for reference)
-        {"line_id": "LN-0018", "wo_id": "WO-0010", "part_no": "PART-004",
-         "part_desc": "Air Filter Element", "required_qty": 8, "allocated_qty": 0, "received_qty": 8},
+        {"line_id": "LN-0010", "wo_id": "WO-0006", "part_no": "WP9757-03",
+         "part_desc": "PUMP,WATER", "required_qty": 8, "allocated_qty": 0, "received_qty": 0},
+        {"line_id": "LN-0011", "wo_id": "WO-0006", "part_no": "000000016958",
+         "part_desc": "BELT,V", "required_qty": 6, "allocated_qty": 0, "received_qty": 0},
+        # WO-0007 (Critical, IMSMB Brigade)
+        {"line_id": "LN-0012", "wo_id": "WO-0007", "part_no": "1457429180",
+         "part_desc": "OIL FILTER", "required_qty": 20, "allocated_qty": 0, "received_qty": 0},
+        {"line_id": "LN-0013", "wo_id": "WO-0007", "part_no": "000000016958",
+         "part_desc": "BELT,V", "required_qty": 4, "allocated_qty": 0, "received_qty": 0},
+        # WO-0008 (High, IMSMB Brigade)
+        {"line_id": "LN-0014", "wo_id": "WO-0008", "part_no": "7161360160",
+         "part_desc": "BRAKE PAD", "required_qty": 8, "allocated_qty": 0, "received_qty": 0},
+        {"line_id": "LN-0015", "wo_id": "WO-0008", "part_no": "424316-0290",
+         "part_desc": "BRAKE DISC", "required_qty": 6, "allocated_qty": 0, "received_qty": 0},
+        # WO-0009 (Normal, IMSMB Brigade)
+        {"line_id": "LN-0016", "wo_id": "WO-0009", "part_no": "1457429180",
+         "part_desc": "OIL FILTER", "required_qty": 15, "allocated_qty": 0, "received_qty": 0},
+        {"line_id": "LN-0017", "wo_id": "WO-0009", "part_no": "000000051836",
+         "part_desc": "Coolant Hose HVAC", "required_qty": 5, "allocated_qty": 0, "received_qty": 0},
+        # WO-0010 (Closed)
+        {"line_id": "LN-0018", "wo_id": "WO-0010", "part_no": "000000029761",
+         "part_desc": "PUMP,FUEL,ELECTRICAL", "required_qty": 8, "allocated_qty": 0, "received_qty": 8},
     ])
 
     wo_part_lines = derive_wo_part_lines(wo_part_lines)
@@ -366,17 +419,59 @@ def sidebar():
             for key in ["work_orders", "wo_part_lines", "batches", "batch_lines", "allocations"]:
                 if key in st.session_state:
                     del st.session_state[key]
+            if "cb_wo_sel" in st.session_state:
+                del st.session_state["cb_wo_sel"]
             st.success("Demo data reset.")
             st.rerun()
+        st.markdown("---")
+        if not PARTS_DF.empty:
+            st.markdown(f"<div style='font-size:0.72rem;color:#5a6080'>"
+                        f"📦 Catalogue: <b style='color:#4f8ef7'>{len(PARTS_DF):,}</b> active parts</div>",
+                        unsafe_allow_html=True)
+        st.markdown(f"<div style='font-size:0.72rem;color:#5a6080'>"
+                    f"🏢 Brigades: <b style='color:#4f8ef7'>{len(BRIGADES)}</b> units</div>",
+                    unsafe_allow_html=True)
     return page
 
 
 # ─────────────────────────────────────────────────────────────
-# PAGE 1 — WORK ORDERS
+# PARTS CATALOGUE HELPERS
 # ─────────────────────────────────────────────────────────────
+def get_part_info(part_no: str) -> dict:
+    """Look up a single part from the catalogue. Returns {} if not found."""
+    if PARTS_DF.empty:
+        return {}
+    row = PARTS_DF[PARTS_DF["MNGPartNumber"] == str(part_no).strip()]
+    if row.empty:
+        return {}
+    return row.iloc[0].to_dict()
+
+
+def enrich_lines_with_catalogue(df: pd.DataFrame) -> pd.DataFrame:
+    """Left-join WO part lines with catalogue fields for display purposes."""
+    if PARTS_DF.empty:
+        return df
+    cat = PARTS_DF[["MNGPartNumber", "UnitOfMeasure", "PlatformVehicleType",
+                     "Supplier", "LeadTimeDays", "Criticality"]].copy()
+    cat = cat.rename(columns={"MNGPartNumber": "part_no",
+                               "Criticality": "cat_criticality"})
+    return df.merge(cat, on="part_no", how="left")
+
+
+
 def page_work_orders():
     st.markdown('<div class="section-header">📋 Work Orders</div>', unsafe_allow_html=True)
 
+    tab_wo, tab_cat = st.tabs(["Work Orders", "🔍 Parts Catalogue"])
+
+    with tab_wo:
+        _render_work_orders_tab()
+
+    with tab_cat:
+        _render_parts_catalogue_tab()
+
+
+def _render_work_orders_tab():
     wo = st.session_state.work_orders.copy()
     wpl = st.session_state.wo_part_lines.copy()
 
@@ -401,7 +496,6 @@ def page_work_orders():
     with dr_col2:
         f_date_to = st.date_input("Created To", value=date.today())
 
-    # Apply filters
     mask = pd.Series([True] * len(wo))
     if f_brigade != "All":
         mask &= wo["brigade"] == f_brigade
@@ -420,13 +514,64 @@ def page_work_orders():
     st.markdown("---")
     st.markdown("#### 🔍 Part Lines Drill-Down")
     for _, row in filtered.iterrows():
-        lines = wpl[wpl["wo_id"] == row["wo_id"]]
+        lines = wpl[wpl["wo_id"] == row["wo_id"]].copy()
         label = (f"**{row['wo_id']}** | {row['workshop']} | "
                  f"Priority: {row['priority']} | Status: {row['status']}")
         with st.expander(label):
-            cols_show = ["line_id", "part_no", "part_desc",
-                         "required_qty", "received_qty", "outstanding_qty", "line_status"]
-            st.dataframe(lines[cols_show], use_container_width=True, hide_index=True)
+            enriched = enrich_lines_with_catalogue(lines)
+            show_cols = ["line_id", "part_no", "part_desc", "required_qty",
+                         "received_qty", "outstanding_qty", "line_status"]
+            extra_cols = [c for c in ["UnitOfMeasure", "PlatformVehicleType",
+                                      "Supplier", "LeadTimeDays"] if c in enriched.columns]
+            st.dataframe(enriched[show_cols + extra_cols],
+                         use_container_width=True, hide_index=True)
+
+
+def _render_parts_catalogue_tab():
+    st.markdown("#### Parts Catalogue Search")
+    if PARTS_DF.empty:
+        st.warning("Parts catalogue CSV not found alongside app.py.")
+        return
+
+    st.caption(f"**{len(PARTS_DF):,} active parts** loaded from IMSS materials catalogue.")
+
+    sc1, sc2, sc3 = st.columns(3)
+    with sc1:
+        search_text = st.text_input("Search part number or description",
+                                    placeholder="e.g. OIL FILTER or 1457429180")
+    with sc2:
+        platform_opts = ["All"] + sorted(
+            PARTS_DF["PlatformVehicleType"].dropna().unique().tolist()
+        )
+        f_platform = st.selectbox("Platform / Vehicle Type", platform_opts)
+    with sc3:
+        uom_opts = ["All"] + sorted(PARTS_DF["UnitOfMeasure"].dropna().unique().tolist())
+        f_uom = st.selectbox("Unit of Measure", uom_opts)
+
+    results = PARTS_DF.copy()
+    if search_text.strip():
+        q = search_text.strip().upper()
+        results = results[
+            results["MNGPartNumber"].str.upper().str.contains(q, na=False) |
+            results["DescriptionEn"].str.upper().str.contains(q, na=False)
+        ]
+    if f_platform != "All":
+        results = results[results["PlatformVehicleType"] == f_platform]
+    if f_uom != "All":
+        results = results[results["UnitOfMeasure"] == f_uom]
+
+    st.markdown(f"**{len(results):,} parts found**")
+
+    display_cols = ["MNGPartNumber", "DescriptionEn", "DescriptionAr",
+                    "UnitOfMeasure", "PlatformVehicleType", "Supplier",
+                    "LeadTimeDays", "Criticality", "WarehouseCategory",
+                    "Repairability", "NSN", "OEMPartNumber"]
+    display_cols = [c for c in display_cols if c in results.columns]
+
+    st.dataframe(results[display_cols].head(500),
+                 use_container_width=True, hide_index=True)
+    if len(results) > 500:
+        st.caption("Showing first 500 results. Refine your search to see more.")
 
 
 # ─────────────────────────────────────────────────────────────
@@ -694,6 +839,16 @@ def page_procurement_updates():
     if bl.empty:
         st.info("No batch lines found.")
         return
+
+    # Show catalogue enrichment summary above the editor
+    bl_enriched = enrich_lines_with_catalogue(bl[["batch_line_id", "part_no", "part_desc",
+                                                   "total_required_qty", "received_qty"]].copy())
+    cat_cols = [c for c in ["PlatformVehicleType", "Supplier", "LeadTimeDays",
+                             "UnitOfMeasure"] if c in bl_enriched.columns]
+    if cat_cols:
+        with st.expander("📖 Catalogue Details for Batch Parts", expanded=False):
+            st.dataframe(bl_enriched[["part_no", "part_desc"] + cat_cols],
+                         use_container_width=True, hide_index=True)
 
     # Make editable
     edited = st.data_editor(
