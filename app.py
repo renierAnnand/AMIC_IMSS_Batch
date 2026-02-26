@@ -15,6 +15,29 @@ import pandas as pd
 import numpy as np
 from datetime import date, datetime, timedelta
 import uuid
+import os
+
+
+# ─────────────────────────────────────────────────────────────
+# LOAD BRIGADES FROM CSV
+# ─────────────────────────────────────────────────────────────
+def load_brigades() -> list:
+    """
+    Load brigade names from Brigades_20260226.csv if present alongside app.py.
+    Falls back to demo names if file not found.
+    TO REPLACE WITH DB: query the Units/Brigades table directly.
+    """
+    csv_path = os.path.join(os.path.dirname(__file__), "Brigades_20260226.csv")
+    if not os.path.exists(csv_path):
+        # fallback
+        return ["1st Brigade", "2nd Brigade"]
+    df = pd.read_csv(csv_path, comment="#")
+    df.columns = [c.strip() for c in df.columns]
+    # Use "Code - NameEn" as the display label so it's meaningful
+    brigades = (df["Code"].str.strip() + " — " + df["NameEn"].str.strip()).tolist()
+    return sorted(brigades)
+
+BRIGADES = load_brigades()
 
 # ─────────────────────────────────────────────────────────────
 # PAGE CONFIG
@@ -206,35 +229,39 @@ def init_data():
     today = date.today()
 
     # ── Work Orders ──────────────────────────────────────────
+    # Use real brigade codes from CSV (first two for demo)
+    b1 = "KAMB — King Abdulaziz Mechanized Brigade"
+    b2 = "IMSMB — Imam Muhammad bin Saud Mechanized Brigade"
+
     work_orders = pd.DataFrame([
-        {"wo_id": "WO-0001", "brigade": "1st Brigade", "workshop": "Workshop Alpha",
+        {"wo_id": "WO-0001", "brigade": b1, "workshop": "Workshop Alpha",
          "created_date": today - timedelta(days=30), "priority": "Critical",
          "status": "Waiting Parts"},
-        {"wo_id": "WO-0002", "brigade": "1st Brigade", "workshop": "Workshop Alpha",
+        {"wo_id": "WO-0002", "brigade": b1, "workshop": "Workshop Alpha",
          "created_date": today - timedelta(days=25), "priority": "High",
          "status": "Waiting Parts"},
-        {"wo_id": "WO-0003", "brigade": "1st Brigade", "workshop": "Workshop Bravo",
+        {"wo_id": "WO-0003", "brigade": b1, "workshop": "Workshop Bravo",
          "created_date": today - timedelta(days=22), "priority": "Normal",
          "status": "Waiting Parts"},
-        {"wo_id": "WO-0004", "brigade": "1st Brigade", "workshop": "Workshop Bravo",
+        {"wo_id": "WO-0004", "brigade": b1, "workshop": "Workshop Bravo",
          "created_date": today - timedelta(days=18), "priority": "High",
          "status": "Under Maintenance"},
-        {"wo_id": "WO-0005", "brigade": "1st Brigade", "workshop": "Workshop Bravo",
+        {"wo_id": "WO-0005", "brigade": b1, "workshop": "Workshop Bravo",
          "created_date": today - timedelta(days=15), "priority": "Critical",
          "status": "Waiting Parts"},
-        {"wo_id": "WO-0006", "brigade": "1st Brigade", "workshop": "Workshop Charlie",
+        {"wo_id": "WO-0006", "brigade": b1, "workshop": "Workshop Charlie",
          "created_date": today - timedelta(days=10), "priority": "Normal",
          "status": "Waiting Parts"},
-        {"wo_id": "WO-0007", "brigade": "2nd Brigade", "workshop": "Workshop Alpha",
+        {"wo_id": "WO-0007", "brigade": b2, "workshop": "Workshop Alpha",
          "created_date": today - timedelta(days=28), "priority": "Critical",
          "status": "Waiting Parts"},
-        {"wo_id": "WO-0008", "brigade": "2nd Brigade", "workshop": "Workshop Alpha",
+        {"wo_id": "WO-0008", "brigade": b2, "workshop": "Workshop Alpha",
          "created_date": today - timedelta(days=20), "priority": "High",
          "status": "Waiting Parts"},
-        {"wo_id": "WO-0009", "brigade": "2nd Brigade", "workshop": "Workshop Bravo",
+        {"wo_id": "WO-0009", "brigade": b2, "workshop": "Workshop Bravo",
          "created_date": today - timedelta(days=14), "priority": "Normal",
          "status": "Waiting Parts"},
-        {"wo_id": "WO-0010", "brigade": "2nd Brigade", "workshop": "Workshop Charlie",
+        {"wo_id": "WO-0010", "brigade": b2, "workshop": "Workshop Charlie",
          "created_date": today - timedelta(days=7),  "priority": "High",
          "status": "Closed"},
     ])
@@ -354,7 +381,7 @@ def page_work_orders():
     wpl = st.session_state.wo_part_lines.copy()
 
     c1, c2, c3, c4 = st.columns(4)
-    brigades = ["All"] + sorted(wo["brigade"].unique().tolist())
+    brigades = ["All"] + BRIGADES
     workshops = ["All"] + sorted(wo["workshop"].unique().tolist())
     statuses = ["All"] + sorted(wo["status"].unique().tolist())
     priorities = ["All"] + ["Critical", "High", "Normal"]
@@ -423,58 +450,100 @@ def page_create_batch():
         )
     ]["line_id"].tolist()
 
-    brigades = sorted(wo["brigade"].unique().tolist())
-    brigade = st.selectbox("Select Brigade", brigades)
+    # Brigade selector — uses real brigade list from CSV
+    brigade = st.selectbox("Select Brigade", BRIGADES)
 
-    eligible_wo = wo[
+    eligible_wo_df = wo[
         (wo["brigade"] == brigade) & (wo["status"] == "Waiting Parts")
-    ]["wo_id"].tolist()
+    ].copy()
 
-    if not eligible_wo:
+    if eligible_wo_df.empty:
         st.warning("No eligible Work Orders (status: Waiting Parts) for this brigade.")
+        _render_submit_drafts(brigade)
         return
 
     eligible_lines = wpl[
-        (wpl["wo_id"].isin(eligible_wo)) &
+        (wpl["wo_id"].isin(eligible_wo_df["wo_id"])) &
         (~wpl["line_id"].isin(locked_line_ids)) &
         (wpl["line_status"] != "Ready")
     ].copy()
     eligible_lines = eligible_lines.merge(
-        wo[["wo_id", "priority", "created_date"]], on="wo_id", how="left"
+        wo[["wo_id", "priority", "created_date", "workshop"]], on="wo_id", how="left"
     )
 
-    st.markdown(f"#### Eligible WOs for **{brigade}** — Waiting Parts")
-    st.dataframe(
-        eligible_lines[["line_id", "wo_id", "priority", "part_no", "part_desc",
-                         "required_qty", "outstanding_qty", "line_status"]],
-        use_container_width=True, hide_index=True,
-    )
+    st.markdown(f"#### Select Work Orders — **{brigade}**")
+    st.caption("Tick the Work Orders you want to include in this batch. "
+               "All eligible part lines for each selected WO will be added.")
 
-    selected_wo = st.multiselect(
-        "Select Work Orders to include (all their eligible lines will be added)",
-        options=eligible_wo,
-        default=eligible_wo[:min(3, len(eligible_wo))],
-    )
+    # ── Checkbox table ──────────────────────────────────────
+    # Build a summary row per WO for the checkbox table
+    wo_summary = (
+        eligible_lines.groupby(["wo_id", "priority", "created_date", "workshop"], as_index=False)
+        .agg(part_lines=("line_id", "count"), total_outstanding=("outstanding_qty", "sum"))
+    ).sort_values(["priority", "created_date"], key=lambda col: col.map(PRIORITY_ORDER) if col.name == "priority" else col)
+
+    # Initialise checkbox state
+    if "cb_wo_sel" not in st.session_state:
+        st.session_state.cb_wo_sel = {}
+
+    # Header row
+    hc0, hc1, hc2, hc3, hc4, hc5, hc6 = st.columns([0.5, 1.5, 1.5, 1.5, 1.5, 1.2, 1.2])
+    hc0.markdown("**✓**")
+    hc1.markdown("**WO ID**")
+    hc2.markdown("**Workshop**")
+    hc3.markdown("**Priority**")
+    hc4.markdown("**Created**")
+    hc5.markdown("**Lines**")
+    hc6.markdown("**Outstanding**")
+
+    st.markdown("<hr style='margin:4px 0 8px 0; border-color:#2d3150'>", unsafe_allow_html=True)
+
+    priority_colors = {"Critical": "#f87171", "High": "#fbbf24", "Normal": "#94a3b8"}
+
+    for _, row in wo_summary.iterrows():
+        wid = row["wo_id"]
+        key = f"cb_{wid}"
+        # default to checked for first 3
+        default = list(wo_summary["wo_id"]).index(wid) < 3
+        c0, c1, c2, c3, c4, c5, c6 = st.columns([0.5, 1.5, 1.5, 1.5, 1.5, 1.2, 1.2])
+        checked = c0.checkbox("", value=st.session_state.cb_wo_sel.get(key, default), key=key, label_visibility="collapsed")
+        st.session_state.cb_wo_sel[key] = checked
+        c1.markdown(f"`{wid}`")
+        c2.markdown(row["workshop"])
+        color = priority_colors.get(row["priority"], "#94a3b8")
+        c3.markdown(f"<span style='color:{color};font-weight:600'>{row['priority']}</span>", unsafe_allow_html=True)
+        c4.markdown(str(row["created_date"]))
+        c5.markdown(str(int(row["part_lines"])))
+        c6.markdown(f"**{int(row['total_outstanding'])}**")
+
+    selected_wo = [
+        row["wo_id"] for _, row in wo_summary.iterrows()
+        if st.session_state.cb_wo_sel.get(f"cb_{row['wo_id']}", False)
+    ]
+
+    st.markdown("---")
 
     selected_lines = eligible_lines[eligible_lines["wo_id"].isin(selected_wo)].copy()
 
     if selected_lines.empty:
-        st.info("Select at least one Work Order above.")
+        st.info("Tick at least one Work Order above to continue.")
+        _render_submit_drafts(brigade)
         return
 
-    st.markdown("**Lines to be included:**")
-    st.dataframe(
-        selected_lines[["line_id", "wo_id", "part_no", "part_desc", "outstanding_qty"]],
-        use_container_width=True, hide_index=True,
-    )
+    # Lines preview
+    with st.expander(f"📋 View {len(selected_lines)} part lines included", expanded=False):
+        st.dataframe(
+            selected_lines[["line_id", "wo_id", "part_no", "part_desc", "outstanding_qty"]],
+            use_container_width=True, hide_index=True,
+        )
 
-    # Aggregate into batch lines grouped by part_no
+    # Aggregated batch lines
     agg = (
         selected_lines.groupby(["part_no", "part_desc"], as_index=False)["outstanding_qty"]
         .sum()
         .rename(columns={"outstanding_qty": "total_required_qty"})
     )
-    st.markdown("**Aggregated Batch Lines (by Part No):**")
+    st.markdown("**Aggregated Batch Lines (grouped by Part No):**")
     st.dataframe(agg, use_container_width=True, hide_index=True)
 
     col1, col2 = st.columns(2)
@@ -493,11 +562,9 @@ def page_create_batch():
             st.error("Created By is required.")
             return
 
-        # Generate IDs
         new_batch_id = next_id("BATCH", st.session_state.batches["batch_id"].tolist())
         new_status = "Subm to Procurement" if submit_to_proc else "Draft"
 
-        # New batch header
         new_batch = pd.DataFrame([{
             "batch_id": new_batch_id,
             "brigade": brigade,
@@ -510,7 +577,6 @@ def page_create_batch():
             [st.session_state.batches, new_batch], ignore_index=True
         )
 
-        # New batch lines + allocations
         new_batch_lines = []
         new_allocs = []
         for _, bl_row in agg.iterrows():
@@ -531,7 +597,6 @@ def page_create_batch():
                 "received_qty": 0,
                 "expected_delivery_date": None,
             })
-            # Create allocation rows for each WO part line that maps to this part_no
             part_lines = selected_lines[selected_lines["part_no"] == bl_row["part_no"]]
             for _, pl in part_lines.iterrows():
                 alloc_id = next_id(
@@ -561,10 +626,18 @@ def page_create_batch():
                 ignore_index=True,
             )
 
+        # Clear checkbox state so next visit is fresh
+        for key in list(st.session_state.cb_wo_sel.keys()):
+            del st.session_state.cb_wo_sel[key]
+
         st.success(f"✅ Batch **{new_batch_id}** created with status **{new_status}**.")
         st.rerun()
 
-    # ── Existing Drafts — Submit to Procurement ──────────────
+    _render_submit_drafts(brigade)
+
+
+def _render_submit_drafts(brigade: str):
+    """Helper: show draft batches for this brigade with a Submit button."""
     st.markdown("---")
     st.markdown("#### 📤 Submit Draft Batches to Procurement")
     drafts = st.session_state.batches[
